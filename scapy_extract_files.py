@@ -1,133 +1,120 @@
-import argparse
+import collections
+import os
 import re
-import gzip
-import io
-import base64
-from pathlib import Path
-from collections import defaultdict
+import zlib
+from scapy.all import TCP, IP, PcapReader
 
-try:
-    from scapy.all import PcapReader, TCP, IP
-except ImportError:
-    raise SystemExit("Scapy is required. Install with: pip install scapy")
+# Use raw strings for Windows paths to avoid escape character errors
+OUTDIR = r'C:\Users\User\Downloads\extracted_images'
+PCAPS = r'C:\Users\User\Downloads'
+os.makedirs(OUTDIR, exist_ok=True)
 
-def canonical_session(pkt):
-    a = (pkt[IP].src, pkt[TCP].sport)
-    b = (pkt[IP].dst, pkt[TCP].dport)
-    return (a, b) if a <= b else (b, a)
+Response = collections.namedtuple('Response', ['header', 'payload'])
 
-def decode_chunked(b):
-    out = bytearray()
-    idx = 0
-    while True:
-        m = re.match(rb"([0-9A-Fa-f]+)\r\n", b[idx:])
-        if not m: break
-        length = int(m.group(1), 16)
-        idx += m.end()
-        if length == 0: break
-        out += b[idx:idx+length]
-        idx += length + 2
-    return bytes(out)
+def get_header(payload):
+    try:
+        header_end = payload.index(b'\r\n\r\n')
+        header_raw = payload[:header_end].decode('utf-8', errors='ignore')
+    except ValueError:
+        return None
+    return dict(re.findall(r'(?P<name>.*?): (?P<value>.*?)\r\n', header_raw))
 
-def find_http_responses(bytes_data):
-    results = []
-    idx = 0
-    while True:
-        m = re.search(rb"HTTP/1\.[01] \d{3}", bytes_data[idx:])
-        if not m: break
-        start = idx + m.start()
-        hdr_end = bytes_data.find(b"\r\n\r\n", start)
-        if hdr_end == -1: break
-        headers_block = bytes_data[start:hdr_end].decode('latin1', errors='replace')
-        lines = headers_block.split('\r\n')
-        headers = {'status': lines[0]}
-        for line in lines[1:]:
-            if ':' in line:
-                k, v = line.split(':', 1)
-                headers[k.strip().lower()] = v.strip()
-        body_start = hdr_end + 4
-        if headers.get('transfer-encoding') == 'chunked':
-            body = decode_chunked(bytes_data[body_start:])
-        elif 'content-length' in headers:
-            try:
-                body = bytes_data[body_start:body_start+int(headers['content-length'])]
-            except:
-                body = bytes_data[body_start:]
-        else:
-            next_http = re.search(rb"HTTP/1\.[01] \d{3}", bytes_data[body_start:])
-            body = bytes_data[body_start:body_start+next_http.start()] if next_http else bytes_data[body_start:]
-        results.append((headers, body))
-        idx = body_start + max(1, len(body))
-    return results
-
-def carve_files(data, outdir, sess_id):
-    # REMOVED: b'MZ' (exe) and b'\x7fELF' (linux)
-    signatures = {
-        b'\x89PNG\r\n\x1a\n': '.png',
-        b'\xff\xd8\xff': '.jpg',
-        b'%PDF': '.pdf',
-        b'\x47\x49\x46\x38': '.gif'
-    }
-    carved_count = 0
-    for sig, ext in signatures.items():
-        for match in re.finditer(re.escape(sig), data):
-            start = match.start()
-            carved_data = data[start:start + 10000000] 
-            fname = f"carved_{sess_id}_{carved_count}{ext}"
-            with open(Path(outdir) / fname, 'wb') as f:
-                f.write(carved_data)
-            carved_count += 1
-    return carved_count
-
-def sanitize_filename(name):
-    return re.sub(r'[<>:"/\\|\?\*]', '_', name)[:200]
-
-def process_and_save(headers, body, outdir, sess_id):
-    if headers.get('content-encoding') == 'gzip':
-        try: body = gzip.decompress(body)
-        except: pass
+def extract_content(response):
+    header = response.header
+    payload = response.payload
     
-    # REMOVED executable checks here as well
-    signatures = {b'\x89PNG': '.png', b'\xff\xd8\xff': '.jpg', b'%PDF': '.pdf', b'\x47\x49\x46\x38': '.gif'}
-    ext = '.bin'
-    for sig, e in signatures.items():
-        if body.startswith(sig): ext = e; break
-            
-    fname = f"extracted_{sess_id}_{hash(body) % 1000}{ext}"
-    path = Path(outdir) / sanitize_filename(fname)
-    with open(path, 'wb') as f: f.write(body)
-    return path.name
+    try:
+        body_start = payload.index(b'\r\n\r\n') + 4
+        content = payload[body_start:]
+    except ValueError:
+        return None, None
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('pcap'); parser.add_argument('outdir')
-    args = parser.parse_args()
-    outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
-    raw_streams = defaultdict(lambda: {'A->B': [], 'B->A': []})
+    ctype = header.get('Content-Type', '')
+    if 'image' not in ctype:
+        return None, None
     
-    with PcapReader(args.pcap) as pcap_reader:
-        for pkt in pcap_reader:
-            if IP in pkt and TCP in pkt and pkt[TCP].payload:
-                sess = canonical_session(pkt)
-                direction = 'A->B' if (pkt[IP].src, pkt[TCP].sport) == sess[0] else 'B->A'
-                raw_streams[sess][direction].append((pkt[TCP].seq, bytes(pkt[TCP].payload)))
+    ext = ctype.split('/')[-1].split(';')[0].strip()
+    if ext == 'jpeg': ext = 'jpg'
 
-    for sess, dirs in raw_streams.items():
-        sess_id = sanitize_filename(f"{sess[0][0]}_{sess[0][1]}")
-        for dname, chunks in dirs.items():
-            if not chunks: continue
-            chunks.sort(key=lambda x: x[0])
-            min_seq = chunks[0][0]
-            max_end = max(s + len(b) for s, b in chunks)
-            stream_data = bytearray(max_end - min_seq)
-            for seq, b in chunks: stream_data[seq - min_seq:seq - min_seq + len(b)] = b
+    encoding = header.get('Content-Encoding', '')
+    try:
+        if encoding == "gzip":
+            content = zlib.decompress(content, zlib.MAX_WBITS | 32)
+        elif encoding == "deflate":
+            content = zlib.decompress(content)
+    except Exception:
+        return None, None
+
+    return content, ext
+
+class Recapper:
+    def __init__(self, fname):
+        self.fname = fname
+        self.sessions = collections.defaultdict(list)
+
+    def get_responses(self):
+        print(f"[*] Streaming {self.fname}...")
+        # PcapReader reads one packet at a time
+        with PcapReader(self.fname) as reader:
+            for pkt in reader:
+                if IP in pkt and TCP in pkt and pkt[TCP].payload:
+                    if pkt[TCP].dport == 80 or pkt[TCP].sport == 80:
+                        # Create a session identifier (src_ip, src_port, dst_ip, dst_port)
+                        ident = (pkt[IP].src, pkt[TCP].sport, pkt[IP].dst, pkt[TCP].dport)
+                        self.sessions[ident].append(pkt)
+
+        print(f"[*] Processing {len(self.sessions)} streams...")
+        responses = []
+        for ident, packets in self.sessions.items():
+            # Sort by sequence number to fix corruption
+            packets.sort(key=lambda p: p[TCP].seq)
+            payload = b''.join(bytes(p[TCP].payload) for p in packets)
+
+            if b'HTTP/' in payload:
+                header = get_header(payload)
+                if header:
+                    responses.append(Response(header=header, payload=payload))
+        return responses
+
+    def write(self, responses):
+        count = 0
+        for i, resp in enumerate(responses):
+            content, ext = extract_content(resp)
+            if content:
+                fname = os.path.join(OUTDIR, f'visual_{i}.{ext}')
+                with open(fname, 'wb') as f:
+                    f.write(content)
+                print(f"[+] Saved: {fname}")
+                count += 1
+        print(f"\n[!] Done. Extracted {count} visual files.")
+
+    def live_extract(self, pkt):
+        if TCP in pkt and pkt[TCP].payload:
+            ident = (pkt[IP].src, pkt[TCP].sport, pkt[IP].dst, pkt[TCP].dport)
+            self.sessions[ident].append(pkt)
             
-            responses = find_http_responses(bytes(stream_data))
-            if responses:
-                for h, b in responses: process_and_save(h, b, outdir, sess_id)
-            else:
-                num = carve_files(bytes(stream_data), outdir, sess_id)
-                if num > 0: print(f"Carved {num} files from raw stream {sess_id}")
+            if b'\r\n\r\n' in bytes(pkt[TCP].payload) or len(self.sessions[ident]) > 100:
+                self.process_single_session(ident)
+
+    def process_single_session(self, ident):
+        packets = sorted(self.sessions[ident], key=lambda p: p[TCP].seq)
+        payload = b''.join(bytes(p[TCP].payload) for p in packets)
+        header = get_header(payload)
+        if header:
+            resp = Response(header=header, payload=payload)
+            content, ext = extract_content(resp)
+            if content:
+                fname = os.path.join(OUTDIR, f'live_{hash(ident)}.{ext}')
+                with open(fname, 'wb') as f:
+                    f.write(content)
+                print(f"[*] Caught image in real-time: {fname}")
+        del self.sessions[ident]
 
 if __name__ == '__main__':
-    main()
+    pfile = os.path.join(PCAPS, 'captured.pcap')
+    if os.path.exists(pfile):
+        recapper = Recapper(pfile)
+        resps = recapper.get_responses()
+        recapper.write(resps)
+    else:
+        print("File not found.")

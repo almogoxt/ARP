@@ -61,12 +61,12 @@ def find_http_responses(bytes_data):
     return results
 
 def carve_files(data, outdir, sess_id):
+    # REMOVED: b'MZ' (exe) and b'\x7fELF' (linux)
     signatures = {
         b'\x89PNG\r\n\x1a\n': '.png',
         b'\xff\xd8\xff': '.jpg',
         b'%PDF': '.pdf',
-        b'\x47\x49\x46\x38': '.gif',
-        b'MZ': '.exe'
+        b'\x47\x49\x46\x38': '.gif'
     }
     carved_count = 0
     for sig, ext in signatures.items():
@@ -87,6 +87,7 @@ def process_and_save(headers, body, outdir, sess_id):
         try: body = gzip.decompress(body)
         except: pass
     
+    # REMOVED executable checks here as well
     signatures = {b'\x89PNG': '.png', b'\xff\xd8\xff': '.jpg', b'%PDF': '.pdf', b'\x47\x49\x46\x38': '.gif'}
     ext = '.bin'
     for sig, e in signatures.items():
@@ -125,7 +126,6 @@ def main():
             if responses:
                 for h, b in responses: process_and_save(h, b, outdir, sess_id)
             else:
-                # If no HTTP found, CARVE for signatures directly in the raw bytes
                 num = carve_files(bytes(stream_data), outdir, sess_id)
                 if num > 0: print(f"Carved {num} files from raw stream {sess_id}")
 

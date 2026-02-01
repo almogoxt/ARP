@@ -1,4 +1,4 @@
-# ARP Capture & Extractor 🔧
+# ARP Capture & Extractor 
 
 Simple, one-command usage:
 

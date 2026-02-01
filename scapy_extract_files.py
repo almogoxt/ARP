@@ -6,48 +6,27 @@ from pathlib import Path
 from collections import defaultdict
 
 try:
-    from scapy.all import rdpcap, TCP, IP
+    from scapy.all import PcapReader, TCP, IP
 except ImportError:
     raise SystemExit("Scapy is required. Install with: pip install scapy")
-
-
-def read_pcap(path):
-    return rdpcap(path)
 
 def canonical_session(pkt):
     a = (pkt[IP].src, pkt[TCP].sport)
     b = (pkt[IP].dst, pkt[TCP].dport)
     return (a, b) if a <= b else (b, a)
 
-def reassemble_streams(pkts):
-    streams = defaultdict(lambda: {'A->B': [], 'B->A': []})
-    for pkt in pkts:
-        if IP not in pkt or TCP not in pkt or not pkt[TCP].payload:
-            continue
-        
-        try:
-            payload = bytes(pkt[TCP].payload)
-        except Exception:
-            continue
-            
-        sess = canonical_session(pkt)
-        a, _ = sess
-        direction = 'A->B' if (pkt[IP].src, pkt[TCP].sport) == a else 'B->A'
-        streams[sess][direction].append((pkt[TCP].seq, payload))
-
-    reassembled = {}
-    for sess, dirs in streams.items():
-        reassembled[sess] = {}
-        for dname, segs in dirs.items():
-            if not segs: continue
-            min_seq = min(s for s, _ in segs)
-            max_end = max(s + len(b) for s, b in segs)
-            buf = bytearray(max_end - min_seq)
-            for seq, b in segs:
-                offset = seq - min_seq
-                buf[offset:offset+len(b)] = b
-            reassembled[sess][dname] = bytes(buf)
-    return reassembled
+def decode_chunked(b):
+    out = bytearray()
+    idx = 0
+    while True:
+        m = re.match(rb"([0-9A-Fa-f]+)\r\n", b[idx:])
+        if not m: break
+        length = int(m.group(1), 16)
+        idx += m.end()
+        if length == 0: break
+        out += b[idx:idx+length]
+        idx += length + 2
+    return bytes(out)
 
 def find_http_responses(bytes_data):
     results = []
@@ -72,8 +51,11 @@ def find_http_responses(bytes_data):
         if headers.get('transfer-encoding') == 'chunked':
             body = decode_chunked(bytes_data[body_start:])
         elif 'content-length' in headers:
-            clen = int(headers['content-length'])
-            body = bytes_data[body_start:body_start+clen]
+            try:
+                clen = int(headers['content-length'])
+                body = bytes_data[body_start:body_start+clen]
+            except:
+                body = bytes_data[body_start:]
         else:
             next_http = re.search(rb"HTTP/1\.[01] \d{3}", bytes_data[body_start:])
             body = bytes_data[body_start:body_start+next_http.start()] if next_http else bytes_data[body_start:]
@@ -81,19 +63,6 @@ def find_http_responses(bytes_data):
         results.append((headers, body))
         idx = body_start + max(1, len(body))
     return results
-
-def decode_chunked(b):
-    out = bytearray()
-    idx = 0
-    while True:
-        m = re.match(rb"([0-9A-Fa-f]+)\r\n", b[idx:])
-        if not m: break
-        length = int(m.group(1), 16)
-        idx += m.end()
-        if length == 0: break
-        out += b[idx:idx+length]
-        idx += length + 2
-    return bytes(out)
 
 def guess_extension(body, headers):
     if body.startswith(b'\x89PNG\r\n\x1a\n'): return '.png'
@@ -107,7 +76,6 @@ def guess_extension(body, headers):
     if 'text/html' in ctype: return '.html'
     if 'application/json' in ctype: return '.json'
     if 'text/javascript' in ctype: return '.js'
-    
     return '.bin'
 
 def sanitize_filename(name):
@@ -119,7 +87,7 @@ def process_and_save(headers, body, outdir, sess_id):
         try:
             body = gzip.decompress(body)
         except Exception:
-            pass
+            pass 
 
     fname = None
     if 'content-disposition' in headers:
@@ -132,7 +100,6 @@ def process_and_save(headers, body, outdir, sess_id):
         fname = f"extracted_{sess_id}_{hash(body) % 1000}{ext}"
     
     path = Path(outdir) / sanitize_filename(fname)
-    
     counter = 1
     original_path = path
     while path.exists():
@@ -152,28 +119,51 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     
-    print(f"[*] Reading {args.pcap}...")
-    pkts = read_pcap(args.pcap)
-    streams = reassemble_streams(pkts)
+    raw_streams = defaultdict(lambda: {'A->B': [], 'B->A': []})
     
+    try:
+        with PcapReader(args.pcap) as pcap_reader:
+            for pkt in pcap_reader:
+                if IP not in pkt or TCP not in pkt or not pkt[TCP].payload:
+                    continue
+                
+                payload = bytes(pkt[TCP].payload)
+                sess = canonical_session(pkt)
+                a, _ = sess
+                direction = 'A->B' if (pkt[IP].src, pkt[TCP].sport) == a else 'B->A'
+                raw_streams[sess][direction].append((pkt[TCP].seq, payload))
+    except Exception as e:
+        print(f"Error: {e}")
+        return
+
     total = 0
-    for sess, dirs in streams.items():
+    for sess, dirs in raw_streams.items():
         sess_id = f"{sess[0][0]}_{sess[0][1]}"
-        for dname, data in dirs.items():
-            responses = find_http_responses(data)
+        for dname, chunks in dirs.items():
+            if not chunks: continue
+            
+            chunks.sort(key=lambda x: x[0])
+            min_seq = chunks[0][0]
+            max_end = max(s + len(b) for s, b in chunks)
+            stream_data = bytearray(max_end - min_seq)
+            for seq, b in chunks:
+                offset = seq - min_seq
+                stream_data[offset:offset+len(b)] = b
+            
+            responses = find_http_responses(bytes(stream_data))
             if responses:
                 for headers, body in responses:
-                    if len(body) < 100: continue
+                    if len(body) < 50: continue 
                     saved_name = process_and_save(headers, body, outdir, sess_id)
-                    print(f"[+] Extracted: {saved_name}")
+                    print(f"Extracted: {saved_name}")
                     total += 1
-            elif len(data) > 5000:
-                raw_name = f"raw_stream_{sess_id}_{dname}.raw"
+            elif len(stream_data) > 10000: 
+                raw_name = f"stream_{sess_id}_{dname}.raw"
                 with open(outdir / raw_name, 'wb') as f:
-                    f.write(data)
-                print(f"[i] Saved raw stream: {raw_name}")
+                    f.write(stream_data)
+                print(f"Saved raw stream: {raw_name}")
 
-    print(f"\n[!] Done. Saved {total} HTTP objects.")
+    print(f"Done. Saved {total} objects to {outdir}")
 
 if __name__ == '__main__':
     main()

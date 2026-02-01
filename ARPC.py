@@ -9,8 +9,18 @@ import shutil
 import time
 import sys
 import re
+import datetime
 import os
 
+
+AUTO_CAPTURE = True
+NO_CAPTURE = False
+PCAP_OUT = None
+DECRYPT_OUTDIR = 'decrypted_out'
+IFACE = None
+NO_TSHARK = False
+AUTO_DECRYPT = True
+AUTO_DECRYPT_INTERVAL = 4
 
 
 def get_default_gateway():
@@ -103,13 +113,12 @@ def start_pcap_capture(pcap_path, iface=None):
         return
     stop_sniff_event = threading.Event()
 
-    # resolve iface: accept either NPF name or friendly adapter name
     def _resolve_iface(iface_arg):
         if not iface_arg:
             return None
         if iface_arg in scapy.get_if_list():
             return iface_arg
-        # try mapping friendly adapter name -> InterfaceGuid via PowerShell
+
         try:
             cmd = ['powershell', '-NoProfile', '-Command', f"Get-NetAdapter -Name '{iface_arg}' | Select-Object -ExpandProperty InterfaceGuid"]
             out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
@@ -120,12 +129,12 @@ def start_pcap_capture(pcap_path, iface=None):
                     return npf_name
         except Exception:
             pass
-        # list available NPF devices for user
+
         print(f"[!] Interface '{iface_arg}' not found in Scapy list.")
         print("[+] Available NPF devices:")
         for i in scapy.get_if_list():
             print("   ", i)
-        # show friendly adapter names and GUIDs where possible
+
         try:
             cmd2 = ['powershell', '-NoProfile', '-Command', "Get-NetAdapter | Select-Object Name, InterfaceGuid | ConvertTo-Json"]
             out2 = subprocess.check_output(cmd2, text=True, stderr=subprocess.DEVNULL)
@@ -176,19 +185,13 @@ def stop_pcap_capture():
         except Exception:
             pass
 
-
-
-
 def run_auto_decrypt(pcap_path, tls_keylog, outdir):
-    """Run local scapy extractor and optionally tshark (if available and not disabled) to export HTTP objects into outdir.
-    This function is safe to run repeatedly; it will append new results to a summary file."""
     if not os.path.exists(pcap_path):
         print(f"[!] pcap not found: {pcap_path}")
         return
 
     os.makedirs(outdir, exist_ok=True)
 
-    # track previously seen files per outdir to report only new
     if 'extraction_state' not in globals():
         globals()['extraction_state'] = {}
     prev_seen = set(globals()['extraction_state'].get(outdir, []))
@@ -197,13 +200,11 @@ def run_auto_decrypt(pcap_path, tls_keylog, outdir):
     scapy_out = os.path.join(outdir, 'scapy_extracted')
     new_files = []
 
-    # Always run the local scapy extractor first (works without tshark)
     if os.path.exists(scapy_extractor):
         try:
             os.makedirs(scapy_out, exist_ok=True)
             print(f"[+] Running local scapy extractor to save additional streams -> {scapy_out}")
             subprocess.run([sys.executable, scapy_extractor, pcap_path, scapy_out], check=False)
-            # collect newly created files
             for root, dirs, files in os.walk(scapy_out):
                 for fn in files:
                     rel = os.path.relpath(os.path.join(root, fn), outdir)
@@ -214,7 +215,6 @@ def run_auto_decrypt(pcap_path, tls_keylog, outdir):
     else:
         print(f"[!] scapy extractor not found at {scapy_extractor}; skipping")
 
-    # Optionally run tshark if available and tls_keylog is present
     if not NO_TSHARK and tls_keylog:
         tshark_cmd = shutil.which('tshark')
         if tshark_cmd:
@@ -240,7 +240,6 @@ def run_auto_decrypt(pcap_path, tls_keylog, outdir):
         elif not tls_keylog:
             print("[i] No tls_keylog provided; cannot run tshark decryption")
 
-    # write summary of newly found files
     try:
         summary_path = os.path.join(outdir, 'summary.txt')
         if new_files:
@@ -249,7 +248,6 @@ def run_auto_decrypt(pcap_path, tls_keylog, outdir):
                 for nf in new_files:
                     sf.write(nf + "\n")
                 sf.write("\n")
-            # update state
             updated = set(prev_seen) | set(new_files)
             globals()['extraction_state'][outdir] = list(updated)
             print(f"[+] Extraction added {len(new_files)} new file(s); summary appended to {summary_path}")
@@ -260,13 +258,10 @@ def run_auto_decrypt(pcap_path, tls_keylog, outdir):
 
 
 def resolve_pcap_path(pcap_arg):
-    """Resolve a pcap path: if the user supplied only a filename (no directory), place it in the user's Downloads folder.
-    Returns absolute path. Does not create the file if pcap_arg is None."""
     if not pcap_arg:
         return None
     base = os.path.expanduser(pcap_arg)
     if os.path.dirname(base):
-        # user provided a path; ensure parent exists
         p = os.path.abspath(base)
         parent = os.path.dirname(p)
         try:
@@ -280,15 +275,11 @@ def resolve_pcap_path(pcap_arg):
         except Exception as e:
             print(f"[!] Could not ensure Downloads folder {downloads}: {e}")
         p = os.path.abspath(os.path.join(downloads, base))
-    # ensure file exists (touch)
     try:
         open(p, 'ab').close()
     except Exception as e:
         print(f"[!] Could not create pcap file at {p}: {e}")
     return p
-
-# --- new default-capture behavior ---
-import datetime
 
 def default_pcap_path():
     """Return a timestamped pcap path in the user's Downloads folder."""
@@ -300,17 +291,7 @@ def default_pcap_path():
     ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     return os.path.abspath(os.path.join(downloads, f"captured_{ts}.pcap"))
 
-# Default configuration for zero-argument auto-run (run: python ARPC.py)
-AUTO_CAPTURE = True
-NO_CAPTURE = False
-PCAP_OUT = None
-DECRYPT_OUTDIR = 'decrypted_out'
-IFACE = None
-NO_TSHARK = False
-AUTO_DECRYPT = True
-AUTO_DECRYPT_INTERVAL = 4
 
-# Auto-detect TLS keylog file if present (env var or common locations)
 def find_tls_keylog():
     env = os.environ.get('SSLKEYLOGFILE')
     if env and os.path.exists(env):
@@ -323,7 +304,6 @@ def find_tls_keylog():
         os.path.join(home, 'Downloads', 'sslkeylog.log'),
         os.path.join(os.getcwd(), 'sslkeylog.log'),
     ]
-    # check cwd for any file that looks like a keylog
     try:
         for f in os.listdir(os.getcwd()):
             if 'key' in f.lower() and 'log' in f.lower() and os.path.isfile(f):
@@ -338,10 +318,8 @@ def find_tls_keylog():
     print("[i] No TLS keylog file detected automatically. To enable full TLS decryption, set SSLKEYLOGFILE in your browser or place a keylog file named 'sslkeylog.log' in your home/Downloads/current dir.")
     return None
 
-# resolved runtime values
 tls_keylog = find_tls_keylog()
 
-# determine capture behavior: default is to capture unless NO_CAPTURE
 resolved_pcap = None
 if NO_CAPTURE:
     print("[i] Capture is disabled (NO_CAPTURE). No pcap will be created.")
@@ -360,14 +338,11 @@ if AUTO_DECRYPT and not tls_keylog:
     print("[i] Auto-decrypt will run local extraction but cannot do tshark-based TLS decryption until a keylog file is available.")
 
 
-
-# periodic auto-decrypt background thread helpers
 stop_decrypt_event = None
 decrypt_thread = None
 decrypt_lock = threading.Lock()
 
 def _periodic_decrypt_worker(pcap_path, tls_keylog, outdir, interval, stop_event):
-    # run immediately once, then every interval seconds until stop_event is set
     while not stop_event.is_set():
         try:
             with decrypt_lock:
@@ -375,7 +350,6 @@ def _periodic_decrypt_worker(pcap_path, tls_keylog, outdir, interval, stop_event
                 run_auto_decrypt(pcap_path, tls_keylog, outdir)
         except Exception as e:
             print(f"[!] Periodic auto-decrypt error: {e}")
-        # wait interval seconds, but break early if stopping
         if interval <= 0:
             break
         stop_event.wait(interval)
@@ -407,7 +381,6 @@ def _cleanup_on_exit():
         stop_pcap_capture()
     except Exception:
         pass
-    # stop periodic decrypt thread before final run
     try:
         stop_periodic_auto_decrypt()
     except Exception:
@@ -429,7 +402,6 @@ if __name__ == '__main__':
     else:
         print("[i] No pcap will be written (capture disabled).")
 
-    # start periodic auto-decrypt if requested
     if AUTO_DECRYPT and resolved_pcap and AUTO_DECRYPT_INTERVAL and AUTO_DECRYPT_INTERVAL > 0:
         start_periodic_auto_decrypt(resolved_pcap, tls_keylog, DECRYPT_OUTDIR, AUTO_DECRYPT_INTERVAL)
     elif AUTO_DECRYPT and resolved_pcap:

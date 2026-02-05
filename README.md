@@ -1,33 +1,34 @@
-# ARP Capture & Extractor 
+## ARP Poisoner and PrintStream capture Tool
 
-Simple, one-command usage:
+* **do not steal my code, goblin** 
+---
 
-- **To run the Program** double-click `start_ARPC.bat` or right-click and "Run as administrator" — this runs `python ARPC.py` with the privileges needed for ARP spoofing. 
+## Features
 
-What happens when you run it:
+* **Targeted ARP Spoofing:** Focuses specifically on a single IP (e.g., your printer) to minimize network noise.
+* **Automatic Interface Detection:** Uses Scapy’s configuration to find your active network adapter automatically.
+* **Session-Based PCAP Logging:** Saves network traffic into timestamped `.pcap` files organized by device folders.
+* **Printer Port Filtering:** Specifically monitors Port **9100** (JetDirect) and Port **515** (LPD) to capture raw document streams.
+* **Safety First:** Includes a robust restoration function to fix ARP tables on exit.
 
-- The tool starts ARP spoofing, writes a timestamped pcap to your **Downloads** folder (`captured_<timestamp>.pcap`), and runs a local extractor periodically to save HTTP objects into `decrypted_out/`.
-- If a TLS keylog file is present (auto-detected from `SSLKEYLOGFILE` env var or common locations), the script will use it and will also run `tshark` (if installed) to export decrypted HTTP objects.
+---
 
-Enabling TLS keylog (quick):
+## Requirements
 
-1. Set an environment variable `SSLKEYLOGFILE` to a writable path (example PowerShell):
+Before running the tool, run Setup.bat. or ensure you have the following installed:
 
-   ```powershell
-   $env:SSLKEYLOGFILE = "C:\Users\%USERNAME%\sslkeylog.log"
-   Start-Process "C:\Program Files\Mozilla Firefox\firefox.exe" -NoNewWindow
-   ```
+1. **Python 3.10+**
+2. **Npcap:** Required for raw packet sniffing on Windows. [Download here](https://npcap.com/). 
+   * *Note: Install with "WinPcap API-compatible mode" checked.*
+3. **Administrative Privileges:** The terminal must be run as Administrator to access the network stack.
 
-   Or set it persistently (requires new session):
+---
 
-   ```powershell
-   setx SSLKEYLOGFILE "%USERPROFILE%\sslkeylog.log"
-   ```
+## Installation
+**just install the zip file**
 
-2. Start the browser from the same environment so it writes keys to that file.
+## Usage
+* Run start_ARPC.bat for the live capture to start
 
-Notes:
-
-- `tshark` is optional; if it exists and a keylog file is present, the script will use it to export HTTP objects. If not present, the built-in scapy extractor still runs and saves raw streams.
-
-- Praise Almog a gever
+## Credits:
+* **Cool Guy:** Almog

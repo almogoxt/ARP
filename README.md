@@ -1,6 +1,6 @@
 ## ARP Poisoner and PrintStream capture Tool
 
-**Note:** do not steal my code, goblin
+ * **Note:** do not steal my code, goblin
 ---
 
 ## Features

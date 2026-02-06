@@ -2,6 +2,7 @@
 setlocal
 title Network Project Setup
 
+:: Check for Python
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo [!] Python not found. 
@@ -14,10 +15,16 @@ if %errorlevel% neq 0 (
 echo [+] Python detected.
 
 echo [*] Upgrading pip...
-python -m pip install --upgrade pip
+python -m pip install --upgrade pip --quiet
 
-echo [*] Installing Scapy...
-pip install -r requirements.txt
+if exist "%~dp0requirements.txt" (
+    echo [*] Installing libraries from requirements.txt...
+    python -m pip install -r "%~dp0requirements.txt"
+) else (
+    echo [!] requirements.txt not found in %~dp0
+    pause
+    exit /b
+)
 
 echo.
 echo [!] IMPORTANT: This project requires Npcap to capture packets.
@@ -30,5 +37,5 @@ if /i "%install_npcap%"=="y" (
 
 echo.
 echo [+] Setup process complete!
-echo [!] Remember to run your script as ADMINISTRATOR.
+echo [!] Remember to run your script as ADMINISTRATOR to use Scapy.
 pause

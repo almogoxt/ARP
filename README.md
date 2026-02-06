@@ -1,9 +1,8 @@
-## ARP Poisoner and PrintStream capture Tool
+# ARP Capture & Extractor 
 
- * **Note:** do not steal my code, goblin
----
+Simple, one-command usage:
 
-## Features
+- **To run the Program** double-click `start_ARPC.bat` or right-click and "Run as administrator" — this runs `python ARPC.py` with the privileges needed for ARP spoofing. 
 
 * **Targeted ARP Spoofing:** Focuses specifically on a single IP (e.g., your printer) to minimize network noise.
 * **Automatic Interface Detection:** Uses Scapy's configuration to find your active network adapter automatically.
@@ -12,22 +11,25 @@
 * **Safety First:** Includes a robust restoration function to fix ARP tables on exit.
 * **Google Drive Upload:** Automatically uploads extracted print jobs to Google Drive.
 
----
+- The tool starts ARP spoofing, writes a timestamped pcap to your **Downloads** folder (`captured_<timestamp>.pcap`), and runs a local extractor periodically to save HTTP objects into `decrypted_out/`.
+- If a TLS keylog file is present (auto-detected from `SSLKEYLOGFILE` env var or common locations), the script will use it and will also run `tshark` (if installed) to export decrypted HTTP objects.
 
-## Requirements
+Enabling TLS keylog (quick):
 
-Before running the tool, run Setup.bat. or ensure you have the following installed:
+1. Set an environment variable `SSLKEYLOGFILE` to a writable path (example PowerShell):
 
-1. **Python 3.10+**
-2. **Npcap:** Required for raw packet sniffing on Windows. [Download here](https://npcap.com/). 
-3. **Administrative Privileges:** The terminal must be run as Administrator to access the network stack.
+   ```powershell
+   $env:SSLKEYLOGFILE = "C:\Users\%USERNAME%\sslkeylog.log"
+   Start-Process "C:\Program Files\Mozilla Firefox\firefox.exe" -NoNewWindow
+   ```
 
----
+   Or set it persistently (requires new session):
 
-## Installation
-**just install the zip file**
+   ```powershell
+   setx SSLKEYLOGFILE "%USERPROFILE%\sslkeylog.log"
+   ```
 
----
+2. Start the browser from the same environment so it writes keys to that file.
 
 ## Google Drive Setup
 
@@ -105,7 +107,6 @@ Extracted files will be uploaded to a folder called **"Extracted_Print_Jobs"** i
 * Run `start_ARPC.bat` for the live capture to start
 * Run `python scapy_extract_files.py` to extract print jobs and upload to Google Drive
 
----
+- `tshark` is optional; if it exists and a keylog file is present, the script will use it to export HTTP objects. If not present, the built-in scapy extractor still runs and saves raw streams.
 
-## Credits:
-* **Cool Guy:** Almog
+- Praise Almog a gever

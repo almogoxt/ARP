@@ -46,32 +46,14 @@ The primary objective is to analyze the security posture of legacy print protoco
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/your-username/network-print-analyzer.git
-cd network-print-analyzer
+git clone https://github.com/almogoxt/ARP.git
+cd ARP
 ```
 
 2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
-
-3. Enable IP forwarding on the host system prior to execution:
-* **Linux:** `sysctl -w net.ipv4.ip_forward=1`
-* **macOS:** `sysctl -w net.inet.ip.forwarding=1`
-
-## Usage
-
-Run the script with specified interface, victim IP, and target printer IP:
-
-```bash
-sudo python3 print_analyzer.py --interface eth0 --target 192.168.1.50 --printer 192.168.1.200 --output ./reconstructed_jobs/
-```
-
-### Options
-* `--interface`, `-i`: Network interface to bind raw sockets.
-* `--target`, `-t`: IP address of the source computer sending print jobs.
-* `--printer`, `-p`: IP address of the destination printer.
-* `--output`, `-o`: Directory to save extracted document files.
 
 ## Security Considerations & Mitigations
 

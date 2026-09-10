@@ -1,92 +1,91 @@
-# ARP Capture & Extractor 
+# Network Traffic Analysis & Print Stream Reassembly Tool
 
-Simple, one-command usage:
+## Overview
 
-- **To run the Program** double-click `start_ARPC.bat` or right-click and "Run as administrator" — this runs `python ARPC.py` with the privileges needed for ARP spoofing. 
+This project is a Proof-of-Concept (PoC) network analysis tool written in Python. It captures, inspects, and reassembles unencrypted network printing traffic (raw TCP port 9100 / JetDirect) across a Local Area Network (LAN). 
 
-* **Targeted ARP Spoofing:** Focuses specifically on a single IP (e.g., your printer) to minimize network noise.
-* **Automatic Interface Detection:** Uses Scapy's configuration to find your active network adapter automatically.
-* **Session-Based PCAP Logging:** Saves network traffic into timestamped `.pcap` files organized by device folders.
-* **Printer Port Filtering:** Specifically monitors Port **9100** (JetDirect) and Port **515** (LPD) to capture raw document streams.
-* **Safety First:** Includes a robust restoration function to fix ARP tables on exit.
-* **Google Drive Upload:** Automatically uploads extracted print jobs to Google Drive.
+The primary objective is to analyze the security posture of legacy print protocols, demonstrate the mechanics of Layer 2/3 traffic interception, and implement TCP payload extraction to reconstruct document streams from raw packet captures.
 
-## Google Drive Setup
+## Architectural Diagram
 
-To enable automatic upload of extracted print jobs to Google Drive, follow these steps:
-
-### Step 1: Create a Google Cloud Project
-
-1. go to [Google Cloud Console](https://console.cloud.google.com/)
-2. create a new project (or use an existing one)
-3. Go to **APIs & Services → Library**
-4. Search for **"Google Drive API"** and click **Enable**
-
-### Step 2: Configure OAuth Consent Screen
-
-1. Go to **APIs & Services → OAuth consent screen**
-2. Select **External** and click **Create**
-3. Fill in the required fields:
-   - App name: `Print Extractor` (or any name)
-   - User support email: Your email
-   - Developer contact email: Your email
-4. Click **Save and Continue**
-5. On the Scopes page, click **Add or Remove Scopes**
-6. Find and select: `https://www.googleapis.com/auth/drive.file`
-7. Click **Update**, then **Save and Continue**
-8. On the Test users page, click **Add Users**
-9. **Add your own Gmail address** (the one you'll use to upload files)
-10. Click **Save and Continue**
-
-### Step 3: Create OAuth Credentials
-
-1. Go to **APIs & Services → Credentials**
-2. Click **Create Credentials → OAuth client ID**
-3. Select **Web application** 
-4. Give it a name
-5. Under **Authorized redirect URIs**, click **Add URI**
-6. Add this exact URI (no spaces!):
-   ```
-   https://developers.google.com/oauthplayground
-   ```
-7. Click **Create**
-8. Copy the **Client ID** and **Client Secret** (you will need this later)
-
-### Step 4: Get a Refresh Token
-
-1. Go to: https://developers.google.com/oauthplayground/
-2. Click the **gear icon** in the top right corner
-3. Check **"Use your own OAuth credentials"**
-4. Paste your **Client ID** and **Client Secret** from Step 3
-5. Close the settings panel
-6. In the left panel, find **"Drive API v3"** and select:
-    `https://www.googleapis.com/auth/drive.file`
-7. Click **"Authorize APIs"**
-8. Log in with the **same Gmail you added as a test user**
-9. Click **Allow** to grant access
-10. Click **"Exchange authorization code for tokens"**
-11. Copy the **Refresh token** (save this too)
-
-### Step 5: Add Credentials to the Script
-
-Open `scapy_extract_files.py` and find these lines near the top:
-
-```python
-CLIENT_ID = ""      # OAuth client ID
-CLIENT_SECRET = ""  # OAuth client secret
-REFRESH_TOKEN = ""  # refresh token
 ```
-Paste the values from before to the fields.
++-------------------+      ARP Poisoning      +-------------------+
+|   Target Host     | <---------------------> |  Attacker / Host  |
+|  (Client / PC)    |                         |  (Analyzer Node)  |
++---------+---------+                         +---------+---------+
+          |                                             |
+          |  Raw JetDirect Traffic (TCP 9100)           | Forwarded Traffic
+          v                                             v
++-----------------------------------------------------------------+
+|                       Target Print Device                       |
++-----------------------------------------------------------------+
+```
 
+## Key Technical Components
 
-Extracted files will be uploaded to a folder called **"Extracted_Print_Jobs"** in your Google Drive.
+### 1. Frame Interception and Forwarding
+* **L2 Address Spoofing:** Utilizes `scapy` to issue gratuitous ARP responses, redirecting traffic between the client and the printer through the monitoring interface.
+* **IP Forwarding:** Ensures uninterrupted network flow by re-transmitting captured frames to the actual hardware MAC address, preventing service disruption during packet capture.
 
----
+### 2. TCP Stream Tracking and Reassembly
+* **Stream Identification:** Filters traffic matching the tuple `(Source IP, Destination IP, Destination Port 9100)`.
+* **Payload Stitching:** Tracks TCP sequence numbers to reassemble out-of-order or fragmented IP segments into a continuous binary stream.
 
-## Usage - very simple to use
-* Run `start_ARPC.bat` for the live capture to start
-* Run `python scapy_extract_files.py` to extract print jobs and upload to Google Drive
+### 3. Protocol Parsing & Document Extraction
+* **PJL (Printer Job Language) Stripping:** Inspects the raw stream for standard PJL header wrappers (e.g., `@PJL ENTER LANGUAGE`, `@PJL JOB`).
+* **Payload Extraction:** Extracts embedded Page Description Language (PDL) payloads—such as PostScript, PCL (Printer Command Language), PWG-Raster, or raw PDF streams—and writes the reconstructed data to local storage for forensic inspection.
 
-- `tshark` is optional; if it exists and a keylog file is present, the script will use it to export HTTP objects. If not present, the built-in scapy extractor still runs and saves raw streams.
+## Technical Requirements
 
-- Praise Almog a gever
+* Python 3.8+
+* Scapy (`pip install scapy`)
+* Elevated Execution Privileges (Root / Administrator access required for raw socket opening and packet injection)
+* Network Interface Card supporting promiscuous mode
+
+## Installation & Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/your-username/network-print-analyzer.git
+cd network-print-analyzer
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Enable IP forwarding on the host system prior to execution:
+* **Linux:** `sysctl -w net.ipv4.ip_forward=1`
+* **macOS:** `sysctl -w net.inet.ip.forwarding=1`
+
+## Usage
+
+Run the script with specified interface, victim IP, and target printer IP:
+
+```bash
+sudo python3 print_analyzer.py --interface eth0 --target 192.168.1.50 --printer 192.168.1.200 --output ./reconstructed_jobs/
+```
+
+### Options
+* `--interface`, `-i`: Network interface to bind raw sockets.
+* `--target`, `-t`: IP address of the source computer sending print jobs.
+* `--printer`, `-p`: IP address of the destination printer.
+* `--output`, `-o`: Directory to save extracted document files.
+
+## Security Considerations & Mitigations
+
+This tool demonstrates the inherent vulnerabilities of legacy, unencrypted print protocols operating on internal networks.
+
+### Vulnerability Analysis
+* **Lack of Encryption:** Port 9100/AppSocket transmits raw print payloads in plaintext.
+* **No Mutual Authentication:** Clients do not verify the authenticity of the print server or network route before transmitting sensitive data.
+
+### Recommended Defenses
+1. **Protocol Migration:** Enforce encrypted print protocols such as IPPS (Internet Printing Protocol Secure over HTTPS, TCP 631).
+2. **Network Segmentation:** Place network printers inside isolated VLANs with strict Access Control Lists (ACLs) restricting host-to-printer access.
+3. **Dynamic ARP Inspection (DAI):** Enable DAI and DHCP Snooping on enterprise switches to block unauthorized ARP response broadcasts.
+
+## Disclaimer
+
+This software was developed strictly for educational research, system administration, and authorized security auditing. Running packet interception or ARP redirection tools on networks without explicit permission from the network owner is illegal and unethical.

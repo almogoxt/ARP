@@ -10,8 +10,7 @@ TARGET_IP = "10.72.61.252"
 PRINTER_PORTS = [9100, 515]
 BASE_OUTPUT_DIR = r'C:\Users\User\Downloads\Network_Project'
 
-TARGET_INDEX = 3
-INTERFACE_OBJ = scapy.conf.ifaces.dev_from_index(TARGET_INDEX)
+INTERFACE_OBJ = scapy.conf.ifaces.dev_from_index(3)
 INTERFACE_NAME = INTERFACE_OBJ.name
 MY_MAC = INTERFACE_OBJ.mac
 
